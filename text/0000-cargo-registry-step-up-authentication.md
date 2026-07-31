@@ -7,28 +7,21 @@
 [summary]: #summary
 
 Define a Cargo registry protocol for additional authorization of an already
-authenticated mutation. Cargo will first send a small mutation
-preflight. A registry can return a structured `step_up_required` error with
-human-readable instructions and a polling URL. Cargo will wait for the
-`acknowledged` state, then send the exact mutation under the preflight's
-idempotency key.
-
-Cargo does not implement an authentication factor. Each registry can use a
-passkey, hardware security key, or another method. Cargo only implements the
-registry-neutral challenge, completion, and retry behavior.
-
-Step-up is an authorization precondition, not a publication state. A protected
-publish remains unsuccessful until the registry has verified any required
-fresh authentication, authorized its exact contents, and completed the
-mutation. The preflight does not stage or reserve a package.
-
-In this RFC, *step-up authentication* is fresh user-presence authentication
-after the registry has accepted the primary credential. A *challenge* is the
-registry's pending authorization request, bound to one exact mutation.
-`acknowledged` is the protocol state indicating that the registry's chosen
-authentication has been verified; it does not mean that the mutation
-succeeded. A server-side *grant* or a one-time callback *proof* authorizes the
-bound mutation after verification.
+authenticated mutation. Cargo will first send a small mutation preflight. A
+registry can return a structured `step_up_required` error with human-readable
+instructions and a polling URL. Cargo will wait for the `acknowledged` state,
+then send the exact mutation under the preflight's idempotency key. Cargo does
+not implement an authentication factor; each registry can use a passkey,
+hardware security key, or another method. Step-up is an authorization
+precondition, not a publication state: the preflight does not stage or reserve
+a package, and a protected publish remains unsuccessful until the registry has
+verified any required fresh authentication, authorized its exact contents, and
+completed the mutation. In this RFC, *step-up authentication* is fresh
+user-presence authentication after the registry has accepted the primary
+credential; a *challenge* is a pending authorization request bound to one exact
+mutation; `acknowledged` means the registry's chosen authentication has been
+verified, not that the mutation succeeded; and a server-side *grant* or
+one-time callback *proof* authorizes the bound mutation after verification.
 
 ## Motivation
 [motivation]: #motivation
@@ -94,6 +87,13 @@ passkey assertion, OTP, or other factor. The registry chooses how to obtain
 user presence and displays the exact operation being authorized. It might ask
 the user to visit a website, run an SSH command, use a hardware device, or
 obtain an administrator's confirmation.
+
+A protected yank, unyank, or owner change follows the same visible workflow.
+For example, `cargo yank --version 1.2.3 example` can pause with instructions to
+authorize "Yank example 1.2.3", while `cargo owner --add alice example` can
+pause to authorize the exact owner addition. After acknowledgment, Cargo sends
+only the bound operation under its mutation id; the user does not manually
+rerun the command.
 
 On an interactive workstation, Cargo will request both a loopback callback and
 a polling fallback. The callback makes local completion immediate. Polling
@@ -237,9 +237,11 @@ When preflight requires additional authentication, the registry responds with
 }
 ```
 
-Cargo will recognize version 1 only when `id` is `step_up_required`,
-`protocol_version` is `1`, and both `challenge_id` and `poll_url` are present.
-Otherwise it reports an ordinary registry error. Unknown fields are ignored.
+The required version 1 fields are `detail`, `id`, `protocol_version`,
+`challenge_id`, and `poll_url`. Cargo will recognize the challenge only when
+all five have the expected JSON types, `id` is `step_up_required`, and
+`protocol_version` is `1`. Otherwise it reports an ordinary registry error.
+All other members are optional, and unknown fields are ignored.
 
 `detail` contains complete instructions for satisfying the challenge and
 manually retrying the operation. Cargo will not execute any command it contains.
@@ -259,8 +261,11 @@ stored hash. If `detail` has no same-origin URL, Cargo displays it unchanged and
 polling remains available. Cargo rejects callback augmentation when the selected
 URL already contains a fragment.
 
-`operation`, `crate`, and `operation_summary` are display and diagnostic
-context. Cargo does not use them to authorize the mutation or construct URLs.
+`operation`, `crate`, and `operation_summary` are optional display and
+diagnostic context. Cargo does not require any of them, does not use them to
+authorize the mutation or construct URLs, and version 1 does not consume
+`operation_summary`.
+
 `challenge_id` identifies the canonical mutation record returned by preflight;
 Cargo will send it as the final request's idempotency key.
 
@@ -507,11 +512,14 @@ composes with these mechanisms rather than replacing them.
 ## Prior art
 [prior-art]: #prior-art
 
-- Some package registries require two-factor authentication for publication
-  and accept an OTP with protected requests. This couples the CLI protocol to
-  an OTP-style factor.
-- Registry sign-in and device-authorization flows demonstrate the usefulness
-  of polling and loopback callbacks for out-of-band verification.
+- npm can require interactive two-factor authentication for publication and
+  package settings ([npm 2FA]). Its staged publishing workflow separately lets
+  CI upload a package for later human approval ([npm staged publishing]). These
+  demonstrate demand for human-authorized publication, while also showing the
+  factor coupling and separate package lifecycle that this RFC avoids.
+- RubyGems supports WebAuthn or OTP for `gem push`, `gem yank`, and owner changes
+  ([RubyGems MFA]). This demonstrates that step-up applies beyond publication;
+  its CLI-visible factor handling is what this registry-neutral protocol avoids.
 - OAuth Step Up Authentication ([RFC 9470]) uses `401` and
   `WWW-Authenticate`. Its terminology is relevant, while this proposal uses a
   `403` registry error and does not obtain a replacement OAuth token.
@@ -519,6 +527,9 @@ composes with these mechanisms rather than replacing them.
   and polls at a recommended interval. This proposal binds authorization to an
   existing authenticated mutation and also supports a loopback callback.
 
+[npm 2FA]: https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification/
+[npm staged publishing]: https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/#staged-publishing
+[RubyGems MFA]: https://guides.rubygems.org/setting-up-multifactor-authentication/
 [RFC 9470]: https://www.rfc-editor.org/rfc/rfc9470.html
 [RFC 8628]: https://www.rfc-editor.org/rfc/rfc8628.html
 
