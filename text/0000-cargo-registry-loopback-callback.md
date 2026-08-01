@@ -2,6 +2,7 @@
 - Start Date: 2026-08-01
 - RFC PR: [rust-lang/rfcs#0000](https://github.com/rust-lang/rfcs/pull/0000)
 - Cargo Issue: [rust-lang/cargo#0000](https://github.com/rust-lang/cargo/issues/0000)
+- crates.io issue: [rust-lang/crates.io#0000](https://github.com/rust-lang/crates.io/issues/0000)
 
 ## Summary
 [summary]: #summary
@@ -46,6 +47,13 @@ callback URL from the stored record and requests it unchanged.
 
 Cargo compares the state and polls immediately. A forged callback merely causes
 an extra poll; it cannot create the registry's grant.
+
+In the common local flow, the maintainer runs `cargo publish`, follows the
+registry link in a browser on the same machine, and verifies the operation.
+The completion page wakes Cargo, Cargo confirms `ready` through the normal poll
+URL, and upload starts without waiting for the next scheduled poll. When the
+browser is on another machine, as in many SSH sessions, the maintainer selects
+`poll` and the same authorization succeeds without a callback.
 
 If binding or delivery fails, polling continues. Explicit `poll` omits the
 callback, which is suitable when a browser runs on another machine. Explicit
@@ -133,16 +141,19 @@ static application may deliver more than one policy; in that case these
 requirements apply to their combined enforcement. At minimum:
 
 - `default-src 'none'`;
-- script is limited to nonce- or hash-authorized first-party code;
+- script is limited to first-party code needed by the verification page,
+  inline script requires a nonce or hash, and `unsafe-eval` is absent;
 - `connect-src` and `form-action` are limited to the registry origin;
-- images used for callback delivery are limited to the registered loopback
-  shape or are avoided;
+- callback delivery can reach only the registry origin and IPv4 loopback;
 - `base-uri 'none'` and `object-src 'none'`;
 - `frame-ancestors 'none'`.
 
-Equivalent or stricter isolation is conforming. CSP is defense in depth: a
-script intentionally allowed by policy can read the operation and callback
-URL, so a third-party script must not execute in this document.
+Static CSP cannot express the callback's dynamic port and state. Immediately
+before delivery, first-party code validates the exact stored URL shape and uses
+that URL unchanged. Equivalent or stricter isolation is conforming. CSP is
+defense in depth: a script intentionally allowed by policy can read the
+operation and callback URL, so third-party script must not execute in this
+document.
 
 The verification UI obtains the operation summary from the stored record, not
 URL query data or `detail`. It describes completion as “authorized,” never as
@@ -245,7 +256,10 @@ without weakening the registry grant.
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-None for `loopback-callback`.
+- Should Cargo stabilize this optimization with the poll-based core or only
+  after registries have deployed callback-page CSP and isolation monitoring?
+- Is IPv4-only loopback acceptable for the first stable version, or should the
+  initial extension define equivalent IPv6 listener and URL-selection rules?
 
 ## Future possibilities
 [future-possibilities]: #future-possibilities

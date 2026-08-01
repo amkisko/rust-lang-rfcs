@@ -2,6 +2,7 @@
 - Start Date: 2026-08-01
 - RFC PR: [rust-lang/rfcs#0000](https://github.com/rust-lang/rfcs/pull/0000)
 - Cargo Issue: [rust-lang/cargo#0000](https://github.com/rust-lang/cargo/issues/0000)
+- crates.io issue: [rust-lang/crates.io#0000](https://github.com/rust-lang/crates.io/issues/0000)
 
 ## Summary
 [summary]: #summary
@@ -52,6 +53,13 @@ A normal request is sent once. Cargo retries only after an interrupted or
 response-ambiguous transport, or a response explicitly classified as
 nonterminal. The retry uses byte-identical content and the same mutation id.
 
+For example, suppose a publish upload reaches the registry and commits, but
+the connection closes before Cargo receives the response. Cargo can retry once
+under the same mutation id. It receives the stored success response, while the
+registry does not create the version, index entry, audit event, or notification
+a second time. If the first connection ended before the complete body matched,
+the retry can instead claim the still-live record and perform the mutation.
+
 The registry serializes attempts. If the first attempt committed, the retry
 returns its stored response without repeating the effect. If the first attempt
 was incomplete, a matching retry can continue within a bounded receive lease.
@@ -91,6 +99,8 @@ and compares them; it never treats the client-declared values as authority.
 
 `content_type` is `application/octet-stream` for publish,
 `application/json` for owners, and `null` for bodyless yank and unyank.
+For bodyless operations a registry may treat an omitted `content_type` as
+equivalent to `null`; it still derives and binds the absence of a media type.
 Parameters are prohibited. `Content-Encoding` remains prohibited. Transfer
 framing is not part of the descriptor.
 
@@ -169,23 +179,25 @@ expects to accept a request and does not extend another deadline.
 
 ### Claim and validation
 
-A final endpoint resolves and serializes `Cargo-Mutation-Id` before reading an
-attacker-selected body. A request can claim `ready` only after checking:
+A final endpoint uses this order:
 
-- primary credential binding and ordinary scope;
-- grant deadline;
-- method and exact path/query;
-- media type and absence of content encoding;
-- declared `Content-Length` equal to the descriptor size.
+1. Parse and authenticate `Cargo-Mutation-Id` without reading an
+   attacker-selected body.
+2. Resolve the record and check primary credential binding and ordinary scope.
+3. Check content encoding, declared `Content-Length`, media type, method, and
+   exact path/query against the descriptor.
+4. If the record is `ready` and its grant is live, atomically transition it to
+   `receiving` and establish the receive lease.
+5. Read no more than the declared descriptor size, require a complete body, and
+   compare its raw digest.
+6. Parse the ordinary operation, compare every semantic field, and transition
+   a complete exact match to `executing`. Publish validation includes archive
+   digest and size.
 
-Unknown ids, another credential, a non-ready state, or any mismatch fails
-without claiming the record. A legitimate request remains usable after a
-mismatched request.
-
-The registry reads no more than the declared descriptor size, computes the raw
-digest, and requires a complete body. It then parses the ordinary operation and
-compares every semantic field. Publish validation includes archive digest and
-size. Only a complete exact match can enter `executing`.
+An unknown id, another credential, a non-ready state, an expired grant, or a
+step 3 mismatch fails before claim. A body or semantic mismatch after claim
+performs no effect and leaves a legitimate matching retry usable until the
+receive lease ends.
 
 Requests sharing a mutation id are serialized. At most one logical execution
 is active. Concurrent matching requests wait for that execution or receive a
@@ -344,9 +356,12 @@ registry whose endpoints cannot yet satisfy crash-safe replay.
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-The first crates.io implementation must document receive-lease duration and
-endpoint-specific recovery for publish, yank, unyank, and owners before
-activating `idempotent-final`.
+- Should this extension stabilize with the core protocol or remain experimental
+  until every protected endpoint has exercised crash recovery and terminal
+  replay in production-like failure tests?
+- Is 24 hours the right minimum terminal-response retention for registry
+  operators, or should the protocol permit a shorter advertised retention once
+  Cargo does not persist mutation ids across invocations?
 
 ## Future possibilities
 [future-possibilities]: #future-possibilities

@@ -2,6 +2,7 @@
 - Start Date: 2026-07-31
 - RFC PR: [rust-lang/rfcs#0000](https://github.com/rust-lang/rfcs/pull/0000)
 - Cargo Issue: [rust-lang/cargo#0000](https://github.com/rust-lang/cargo/issues/0000)
+- crates.io issue: [rust-lang/crates.io#0000](https://github.com/rust-lang/crates.io/issues/0000)
 
 ## Summary
 [summary]: #summary
@@ -36,13 +37,28 @@ Scopes, crate restrictions, and credential providers reduce exposure, but a
 stolen credential with publish authority can still be used without the user's
 presence. Website MFA does not protect a separately issued Cargo credential.
 
+Consider a maintainer who uses the same publish credential from a workstation
+for months. Malware, a copied credentials file, or an accidentally retained CI
+log can give an attacker that credential. Token scopes may limit the attacker
+to one crate, but within that scope the attacker can still publish a malicious
+version immediately. Requiring the maintainer to approve a short-lived record
+for the exact crate, version, and request digest turns possession of the
+credential from sufficient authority into only the first of two independent
+requirements.
+
+There is a second failure mode after verification: a client or intermediary
+must not be able to replace the approved archive, owner list, or yank direction
+with a different mutation. The grant therefore covers the exact semantic
+operation and request bytes rather than merely saying that “some publish” or
+“some owner change” was approved.
+
 Existing Cargo authentication RFCs improve token storage, authentication, and
 replay resistance, but cannot require fresh authorization for one exact
 publish, yank, unyank, or owner change ([RFC 2730], [RFC 2947], [RFC 3139],
 [RFC 3231]).
 A registry can reject an ordinary mutation with prose instructions, but Cargo
 cannot safely determine whether to wait, when to continue, or whether a
-noninteractive credential is exempt.
+non-interactive credential is exempt.
 
 Preflight lets the registry evaluate policy before Cargo uploads a package. It
 also gives the registry the exact semantic operation and request digest that a
@@ -72,12 +88,18 @@ A protected publish has three phases:
 3. After the record is `ready`, Cargo obtains an ordinary credential again and
    sends the unchanged publish request with `Cargo-Mutation-Id`.
 
+From the maintainer's perspective, the extra step occurs between packaging and
+upload. They inspect the registry's verification page, confirm the crate and
+version, and optionally compare the displayed archive digest with one obtained
+from their build environment. Closing the page or pressing Ctrl-C before Cargo
+starts the final request publishes nothing; the short-lived record eventually
+expires.
+
 For a pending operation Cargo displays registry instructions and polls:
 
 ```console
 $ cargo publish
    Packaging example v1.2.3 (/work/example)
- Authorizing example v1.2.3 (/work/example)
        Note Instructions from registry https://crates.io:
             Additional authorization is required.
             https://crates.io/verify/mut_0123456789abcdefghijkl
@@ -109,6 +131,14 @@ The loopback companion adds `loopback` and lets interactive `auto` use a
 callback as a polling accelerator. The execution companion lets Cargo retry an
 ambiguous final request under the same mutation id.
 
+Registry operators can deploy the protocol before requiring it. During an
+opt-in phase, preflight can return `ready` for exempt credentials while the
+ordinary endpoints continue accepting older clients for unprotected accounts.
+Enforcement starts only when a protected ordinary endpoint rejects requests
+without a matching ready record. That transition must name the minimum Cargo
+version and provide a recovery path for users who cannot complete the chosen
+verification policy.
+
 ## Reference-level explanation
 [reference-level-explanation]: #reference-level-explanation
 
@@ -138,9 +168,11 @@ failure from silently bypassing authorization. A registry protecting any final
 endpoint must also implement preflight; final-endpoint enforcement remains the
 security boundary.
 
-Version 1 defines publish, yank, unyank, and owner changes. Each request and
-recognized response carries `protocol_version: 1`; there is no version-list
-negotiation. A different or missing response version is a protocol error.
+Version 1 defines publish, yank, unyank, and owner changes. Each preflight
+request and recognized preflight response carries `protocol_version: 1`;
+poll responses are scoped by the versioned record and omit it. There is no
+version-list negotiation. A different or missing preflight response version is
+a protocol error.
 
 Extension use is negotiated per preflight. Cargo requests distinct extensions
 it implements. The registry activates the supported subset applicable to that
@@ -157,7 +189,7 @@ registry deployment.
 
 ### Client modes
 
-The common `--mutation-authorization-channel` option has these core values:
+The common `--mutation-authorization-mode` option has these core values:
 
 | Value | Behavior |
 | --- | --- |
@@ -166,13 +198,13 @@ The common `--mutation-authorization-channel` option has these core values:
 | `disabled` | Skip preflight and use the ordinary endpoint. |
 
 The value can also come from
-`CARGO_REGISTRY_MUTATION_AUTHORIZATION_CHANNEL`,
-`registries.<name>.mutation-authorization-channel`, or
-`registry.mutation-authorization-channel` for crates.io. Precedence is command
+`CARGO_REGISTRY_MUTATION_AUTHORIZATION_MODE`,
+`registries.<name>.mutation-authorization-mode`, or
+`registry.mutation-authorization-mode` for crates.io. Precedence is command
 option, environment, selected-registry configuration, then `auto`.
 
 Interactive `auto` and explicit `poll` set `allow_pending` to true.
-Noninteractive `auto` sets it to false, allowing an exempt credential to
+Non-interactive `auto` sets it to false, allowing an exempt credential to
 proceed without creating an abandoned record. `disabled` sends no preflight.
 The loopback companion adds an explicit `loopback` value and can optimize
 interactive `auto`; it does not alter the core polling fallback.
@@ -219,10 +251,9 @@ method, endpoint, and media type from the operation and its own API base, and
 stores those facts with the descriptor. The parsed final request remains
 authoritative. It must match both the semantic descriptor and raw digest.
 
-Cargo generates a fresh `preflight_id` for each logical invocation. It contains
-at least 128 random bits encoded as 22 through 128 URL-safe ASCII characters.
-It is not a credential. Cargo reuses it only after an interrupted or
-response-ambiguous preflight.
+Cargo generates a fresh `preflight_id` for each logical invocation. It meets
+the [protocol limits], is not a credential, and is reused only after an
+interrupted or response-ambiguous preflight.
 
 The registry atomically maps credential binding identity plus `preflight_id` to
 one record. A retry returns the same record. Reuse with a different descriptor
@@ -232,13 +263,16 @@ while any associated state can be used or observed.
 
 `allow_pending` is required and is derived from the selected client mode.
 
-`requested_extensions` is a required array of at most 16 distinct names. A name
-is 1 through 64 lowercase ASCII letters, digits, or hyphens. Every name Cargo
-sends must be implemented by Cargo. An empty array requests the complete core
-behavior. The registry ignores names it does not implement and activates the
-supported applicable subset. Fields defined by an extension are valid only
-when that extension is requested; the registry ignores such fields when it
-does not activate that extension.
+`requested_extensions` is a required array of distinct names conforming to the
+[protocol limits]. Every name Cargo sends must be implemented by Cargo. An
+empty array requests the complete core behavior. The registry ignores names it
+does not implement and activates the supported applicable subset. A recognized
+extension field is invalid when its extension name is absent from
+`requested_extensions`. If the name is requested but the registry does not
+activate it, the registry ignores that extension's fields and need not store
+them. When the registry activates the extension, it validates and binds its
+fields. Unknown JSON fields remain ignored under the ordinary
+forward-compatibility rule.
 
 Cargo reproduces the complete request when retrying a `preflight_id`. The
 registry binds the protocol version, complete core descriptor, `allow_pending`,
@@ -313,21 +347,19 @@ schema. A retry for a core-only record already consumed by a final request
 returns `409 Conflict` and cannot make the record ready again.
 `interaction_required` is a preflight outcome, not a record state.
 
-`mutation_id` contains at least 128 random bits encoded as 22 through 128
-URL-safe characters. It identifies the record but cannot authorize a mutation
-without the bound primary credential and a ready server-side grant.
+`mutation_id` meets the [protocol limits]. It identifies the record but cannot
+authorize a mutation without the bound primary credential and a ready
+server-side grant.
 
-`challenge_expires_in` and `grant_expires_in` are positive whole seconds from
-receipt and no greater than 300. Cargo rejects invalid values rather than
-extending them. `recommended_poll_interval_secs` is advisory; registries send
-1 through 30, Cargo defaults to 5 and defensively clamps other values.
+Expiry and polling values conform to the [protocol limits]. Cargo rejects an
+invalid expiry rather than extending it. The polling interval is advisory;
+Cargo defaults or clamps it as specified in that appendix.
 
 ### Polling
 
-`poll_url` is no more than 8,192 bytes and has the same scheme, host, and
+`poll_url` meets the [protocol limits] and has the same scheme, host, and
 effective port as the registry API. Cargo sends an unauthenticated `GET`,
-follows no redirect, and rejects a response lacking
-`Cache-Control: no-store`.
+follows no redirect, and rejects a response lacking `Cache-Control: no-store`.
 
 The URL contains an independent token with at least 128 random bits. It is not
 derived from `mutation_id` and does not appear in displayed instructions.
@@ -362,8 +394,8 @@ extensions. `detail` is optional for `denied` and `expired` and prohibited for
 the flow as a protocol error. Once a core-only final request consumes a record,
 its poll capability returns `404`; Cargo has already ended its wait before that
 transition.
-Registries keep denied and expired results observable for at least five minutes
-after transition.
+Registries retain denied and expired results for at least the retention interval
+in [protocol limits].
 
 Cargo establishes a monotonic deadline from the initial pending response. A
 later pending response can shorten but never extend it:
@@ -379,9 +411,8 @@ and `503` only within the original deadline. Other complete responses stop.
 
 ### Display and cancellation
 
-`detail` is nonempty UTF-8 no longer than 8,192 bytes whenever present. Every
-preflight or poll response is no longer than 65,536 bytes. Cargo enforces the
-body limit while receiving, before JSON recognition.
+`detail` and each response meet the [protocol limits]. Cargo enforces the body
+limit while receiving, before JSON recognition.
 
 Cargo renders registry-controlled detail as plain text, visibly neutralizes
 terminal and bidirectional controls, identifies the registry origin, and marks
@@ -405,6 +436,31 @@ only on a terminal.
 Cancellation observed before Cargo starts the final request sends nothing and
 leaves the record to expire. Once the final request begins, interruption has
 ordinary in-flight ambiguity; Cargo does not claim that no request was sent.
+
+### Composition with RFC 3231 asymmetric tokens
+
+Mutation authorization is layered on Cargo's ordinary credential-provider
+operation. Cargo asks for a credential describing the intended mutation when
+it authenticates preflight and asks again after readiness before the final
+request. A registry validating an RFC 3231 PASETO against preflight compares
+its mutation claims with the preflight descriptor: `publish` includes crate,
+version, and archive checksum; `yank` and `unyank` include crate and version.
+The final endpoint validates the later credential against the ordinary request
+as RFC 3231 already requires. The mutation record is bound to the registered
+key as an independently revocable credential, not merely to the account that
+owns it.
+
+RFC 3231 does not define an asymmetric-token claim for owner changes. This RFC
+extends its `mutation` claim with `owners`. For that value, `name` is required
+and identifies the crate, while `vers` and `cksum` are absent. The owner-change
+direction and complete ordered owner list remain bound by this protocol's
+descriptor and final request; the PASETO identifies the operation class and
+crate but does not duplicate the JSON body.
+
+An RFC 3231 challenge and a mutation-authorization poll token are separate
+capabilities. A registry must not substitute one for the other or treat either
+as the server-side grant. Registries that do not implement RFC 3231 continue to
+use their existing bearer or credential-provider authentication unchanged.
 
 ### Credential binding and final request
 
@@ -508,7 +564,7 @@ cleanup rules.
 A registry may require passkey verification, administrator approval, SSH, or
 another policy. Cargo does not infer or participate in the verification method.
 
-`allow_pending: false` lets a noninteractive client learn whether its credential
+`allow_pending: false` lets a non-interactive client learn whether its credential
 is exempt without creating state it cannot consume. Persisting pending records
 and replayable requests across Cargo invocations would require a separate
 on-disk recovery protocol.
@@ -537,6 +593,24 @@ which request version to send without a separate version-list protocol.
 [Cargo Registry Web API]: https://doc.rust-lang.org/cargo/reference/registry-web-api.html
 [idempotent mutation execution]: 0000-cargo-registry-mutation-idempotency.md
 [loopback wake-up]: 0000-cargo-registry-loopback-callback.md
+[protocol limits]: #appendix-protocol-limits
+
+## Appendix: protocol limits
+
+These version 1 bounds are normative. Keeping them together makes the wire
+limits auditable without interrupting the protocol flow.
+
+| Item | Version 1 bound |
+| --- | --- |
+| `preflight_id`, `mutation_id` | At least 128 random bits encoded as 22 through 128 URL-safe ASCII characters. |
+| `requested_extensions` | At most 16 distinct entries. |
+| Extension name | 1 through 64 lowercase ASCII letters, digits, or hyphens. |
+| `challenge_expires_in`, `grant_expires_in` | Positive whole seconds from receipt, no greater than 300. |
+| `recommended_poll_interval_secs` | Registries send 1 through 30; Cargo defaults to 5 when absent and clamps any other received value to this range. |
+| `poll_url` | No more than 8,192 bytes. Its independent token has at least 128 random bits. |
+| `detail` | Nonempty UTF-8, no more than 8,192 bytes whenever present. |
+| Complete preflight or poll response | No more than 65,536 bytes. |
+| Denied or expired poll result retention | At least five minutes after transition. |
 
 ## Appendix: conformance cases
 
@@ -544,7 +618,7 @@ which request version to send without a separate version-list protocol.
    record and rejects changed descriptor, `allow_pending`, active extension
    set, or recognized extension fields. Changes consisting only of ignored
    unknown extension names or fields do not change the record.
-2. Noninteractive `auto` can receive immediate `ready` but cannot create a
+2. Non-interactive `auto` can receive immediate `ready` but cannot create a
    pending record.
 3. A rotating credential succeeds only when both instances map to the same
    narrow binding identity.
@@ -577,7 +651,12 @@ that extension is activated for a record.
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-None for the core protocol.
+- Should stabilization cover the poll-based core first, with
+  `idempotent-final` and `loopback-callback` tracked separately, or should Cargo
+  stabilize the three proposals as one user-visible feature?
+- Should version 1 define how an RFC 3231 registry challenge on preflight is
+  obtained, consumed, and retried before mutation policy runs, or leave that
+  composition to a later stabilization step?
 
 ## Future possibilities
 [future-possibilities]: #future-possibilities
