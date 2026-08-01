@@ -85,10 +85,18 @@ When requesting this extension Cargo additionally sends:
 exact percent encoding. It includes any path prefix from the registry API base.
 Version 1 operations use no query; registries reject one.
 
+Cargo sends `method` and `request_target` as declared request facts. The
+registry derives the expected method and target from its own endpoint routing
+and compares them; it never treats the client-declared values as authority.
+
 `content_type` is `application/octet-stream` for publish,
 `application/json` for owners, and `null` for bodyless yank and unyank.
 Parameters are prohibited. `Content-Encoding` remains prohibited. Transfer
 framing is not part of the descriptor.
+
+The registry derives method, request target, and media type independently from
+the operation and its own API base. Cargo's values are consistency assertions
+needed for safe replay, not authority for selecting an endpoint.
 
 The registry's mutation fingerprint covers protocol version, validated method,
 exact target, media type, absence of content encoding, raw body digest and
@@ -306,7 +314,7 @@ registry whose endpoints cannot yet satisfy crash-safe replay.
 
 [RFC 9110]: https://www.rfc-editor.org/rfc/rfc9110.html
 
-## Conformance cases
+## Appendix: conformance cases
 
 1. Concurrent matching requests cause at most one logical execution.
 2. A mismatched request cannot claim or poison the record.

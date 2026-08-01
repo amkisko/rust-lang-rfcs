@@ -20,8 +20,8 @@ isolation requirements. It never redefines how a record becomes `ready`.
 
 Polling alone works everywhere but adds completion latency and load. On a local
 interactive workstation a browser can notify Cargo immediately after
-verification. A callback carrying a server proof would create a second
-authorization artifact whose loss, replay, and consumption interact badly with
+verification. A callback carrying mutation authority would create a second
+authorization path whose loss, replay, and consumption interact badly with
 final-request retry. A wake-only callback avoids that authority split.
 
 Browser delivery exposes the operation summary and registered loopback URL to
@@ -99,8 +99,9 @@ The state contains at least 128 random bits. It prevents unrelated local pages
 from guessing a valid wake-up request but is not mutation authority. The
 registry validates and stores the exact URL but never connects to it. It is
 delivery metadata, not part of the mutation fingerprint. Retrying one core
-`preflight_id` requires the same requested extension set and a byte-identical
-callback object. A callback object without a requested `loopback-callback`
+`preflight_id` for which `loopback-callback` is active requires a byte-identical
+callback object. Changes consisting only of ignored unknown extensions do not
+change the record. A callback object without a requested `loopback-callback`
 extension is invalid, and Cargo requires the response to confirm activation.
 
 If IPv4 loopback is unavailable, Cargo closes any partial listener state and
@@ -119,8 +120,8 @@ URL-labeling rules.
 
 The verification document reads its operation summary and callback URL from
 the stored record, not URL query data or `detail`. Only after successful
-authorization does it navigate to or load the exact registered callback URL.
-It does not add an OTP, mutation id, poll token, credential, or proof.
+authorization does it navigate to or load the exact registered callback URL
+unchanged. It sends no protocol credential.
 
 ### Verification document isolation
 
@@ -193,9 +194,9 @@ system.
 ## Rationale and alternatives
 [rationale-and-alternatives]: #rationale-and-alternatives
 
-Polling remains authoritative because it works remotely and because a callback
-proof would create another consumable credential. A wake-only callback is safe
-to duplicate, lose, or forge.
+Polling remains authoritative because it works remotely and keeps callback
+delivery outside the authorization path. A wake-only callback is safe to
+duplicate, lose, or forge.
 
 Using `localhost` is more vulnerable to name-resolution and address-family
 surprises than the literal loopback address. Fixing an exact path and port
@@ -219,7 +220,7 @@ without weakening the registry grant.
 [RFC 8628]: https://www.rfc-editor.org/rfc/rfc8628.html
 [Content Security Policy Level 3]: https://www.w3.org/TR/CSP/
 
-## Conformance cases
+## Appendix: conformance cases
 
 1. `auto` requests loopback only when locally interactive and uses it only when
    the registry activates it.

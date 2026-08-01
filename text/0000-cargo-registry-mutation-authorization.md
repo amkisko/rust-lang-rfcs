@@ -157,7 +157,7 @@ registry deployment.
 
 ### Client modes
 
-The common `--registry-authorization` option has these core values:
+The common `--mutation-authorization-channel` option has these core values:
 
 | Value | Behavior |
 | --- | --- |
@@ -383,14 +383,11 @@ and `503` only within the original deadline. Other complete responses stop.
 preflight or poll response is no longer than 65,536 bytes. Cargo enforces the
 body limit while receiving, before JSON recognition.
 
-Cargo renders registry-controlled detail as plain text:
-
-1. Normalize CRLF and bare CR to LF.
-2. Replace C0 controls other than LF, DELETE, C1 controls, and Unicode
-   bidirectional formatting/isolate controls with a visible replacement.
-3. Prefix `Instructions from registry <origin>:`.
-4. Leave recognized cross-origin HTTP(S) URLs printable but label them
-   `external`.
+Cargo renders registry-controlled detail as plain text, visibly neutralizes
+terminal and bidirectional controls, identifies the registry origin, and marks
+recognized cross-origin HTTP(S) URLs as external. The exact display transform
+is an implementation detail provided it prevents control-sequence injection
+and does not turn registry text into active content.
 
 Cargo does not interpret Markdown, hyperlinks, ANSI escapes, shell syntax, or
 commands and never opens a URL automatically. Apart from visibly annotating a
@@ -451,7 +448,6 @@ unusable until record cleanup.
 Missing, expired, denied, mismatched, revoked, malformed, or incomplete
 requests fail before performing an effect. A protected ordinary endpoint
 rejects a request without a valid mutation id regardless of Cargo version.
-A registry-specific reactive compatibility workflow is outside this protocol.
 
 Without `idempotent-final`, Cargo sends the final request once. A crash after
 consumption or response loss has the ordinary mutation's existing ambiguity and
@@ -499,8 +495,7 @@ should name the minimum supported Cargo release.
 - Interactive policy can pause Cargo while authorization completes.
 - Cargo must retain replayable request bytes until the final request.
 - Registries store short-lived records and implement exact descriptor binding.
-- Protected operations become unavailable to old clients without a separate
-  compatibility workflow.
+- Protected operations require a Cargo version that implements this protocol.
 
 ## Rationale and alternatives
 [rationale-and-alternatives]: #rationale-and-alternatives
@@ -510,10 +505,8 @@ proceed. Holding an uploaded package for later approval would instead define a
 staged-publication lifecycle with reservation, visibility, replacement, and
 cleanup rules.
 
-Step-up authentication asks an already authenticated principal for stronger or
-fresher authentication. A registry may use it, passkey verification,
-administrator approval, SSH, or another policy. Mutation authorization names
-the broader exact-mutation protocol; Cargo does not infer the verification method.
+A registry may require passkey verification, administrator approval, SSH, or
+another policy. Cargo does not infer or participate in the verification method.
 
 `allow_pending: false` lets a noninteractive client learn whether its credential
 is exempt without creating state it cannot consume. Persisting pending records
@@ -536,27 +529,21 @@ which request version to send without a separate version-list protocol.
 - OAuth defines its framework in [RFC 6749], device polling and slowdown in
   [RFC 8628], and native-app loopback guidance in [RFC 8252]. This separation
   keeps the base flow independent of the local callback optimization.
-- [XEP-0030] separates implemented protocol features from dynamic policy. This
-  RFC goes further by discovering a small request protocol at its authenticated
-  endpoint, avoiding a second static feature document.
-- The generic option machinery in [XEP-0020] is deprecated. This protocol uses
-  a purpose-built preflight request and response instead.
 
 [RFC 9470]: https://www.rfc-editor.org/rfc/rfc9470.html
 [RFC 6749]: https://www.rfc-editor.org/rfc/rfc6749.html
 [RFC 8628]: https://www.rfc-editor.org/rfc/rfc8628.html
 [RFC 8252]: https://www.rfc-editor.org/rfc/rfc8252.html
-[XEP-0020]: https://xmpp.org/extensions/xep-0020.html
-[XEP-0030]: https://xmpp.org/extensions/xep-0030.html
 [Cargo Registry Web API]: https://doc.rust-lang.org/cargo/reference/registry-web-api.html
 [idempotent mutation execution]: 0000-cargo-registry-mutation-idempotency.md
 [loopback wake-up]: 0000-cargo-registry-loopback-callback.md
 
-## Conformance cases
+## Appendix: conformance cases
 
 1. Different preflight ids create distinct records. Retrying one id returns its
-   record and rejects changed descriptor, `allow_pending`, requested extensions,
-   or extension fields.
+   record and rejects changed descriptor, `allow_pending`, active extension
+   set, or recognized extension fields. Changes consisting only of ignored
+   unknown extension names or fields do not change the record.
 2. Noninteractive `auto` can receive immediate `ready` but cannot create a
    pending record.
 3. A rotating credential succeeds only when both instances map to the same
