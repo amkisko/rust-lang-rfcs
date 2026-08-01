@@ -67,7 +67,8 @@ A protected publish looks like this:
 $ cargo publish
    Packaging example v1.2.3 (/work/example)
  Authorizing example v1.2.3 (/work/example)
-       Note Additional authentication is required. Visit https://crates.io/verify/stp_abc123.
+       Note Instructions from registry https://crates.io:
+            Additional authentication is required. Visit https://crates.io/verify/stp_abc123.
     Waiting for additional authentication
        Note verification complete; continuing
    Uploading example v1.2.3 (/work/example)
@@ -243,8 +244,26 @@ all five have the expected JSON types, `id` is `step_up_required`, and
 `protocol_version` is `1`. Otherwise it reports an ordinary registry error.
 All other members are optional, and unknown fields are ignored.
 
-`detail` contains complete instructions for satisfying the challenge and
-manually retrying the operation. Cargo will not execute any command it contains.
+`detail` is untrusted presentation data and never affects request binding,
+acknowledgment, or authorization. It is a nonempty UTF-8 string of at most 8192
+bytes containing complete instructions for satisfying the challenge and
+manually retrying the operation. The complete preflight or poll response body
+is at most 65536 bytes. Cargo enforces that response limit while receiving the
+body and rejects an oversized body or `detail` instead of recognizing or
+waiting on the challenge.
+
+Cargo renders `detail` as inert plain text. It does not interpret Markdown,
+terminal escapes, hyperlinks, shell syntax, or commands, and never
+automatically opens a URL. Before rendering, Cargo replaces C0 and C1 control
+characters other than line breaks, and Unicode bidirectional formatting
+controls, with a visible replacement character. This prevents terminal control
+injection ([CWE-150]) and makes common bidirectional spoofing techniques
+described by [Unicode UTR #36] visible. Cargo prefixes the text with
+`Instructions from registry <origin>:`. It leaves cross-origin URLs printable
+for registry-defined workflows but visibly marks each recognized one as an
+external URL. These measures reduce presentation attacks; they do not make
+instructions from a malicious configured registry trustworthy.
+
 When callback headers were supplied, the registry returns any callback-capable
 same-origin URL in `detail` without the callback secret or a URL fragment.
 Cargo will add this client-held fragment to the first same-origin URL locally
@@ -305,6 +324,10 @@ user-presence properties before setting the challenge to `acknowledged`. A
 broad authorization window is insufficient because an attacker holding the
 token could substitute another mutation.
 
+The verification mechanism obtains the operation summary from the registry's
+stored challenge record. It does not trust a crate name, digest, owner list, or
+summary copied from `detail` or from verification-URL query parameters.
+
 The registry does not perform the mutation or receive archive bytes before
 verification. A challenge is pending authorization, not an accepted or staged
 package version. It reuses an unexpired mutation record for the same credential
@@ -327,7 +350,8 @@ interval in a poll response.
 
 Treating `poll_url` as a short-lived read-only capability avoids replaying a
 publish-scoped or single-use credential on a `GET`. Possession can reveal only
-the challenge status and cannot acknowledge or execute the mutation.
+the challenge status and any display metadata that the registry deliberately
+returns; it cannot acknowledge or execute the mutation.
 
 When the registry sets the challenge to `acknowledged`, it marks the mutation
 record ready and creates a short-lived server-side grant bound to the exact
@@ -410,6 +434,31 @@ protocol revision.
 
 Registries separately limit preflights, upload bytes, verification attempts,
 and polls. A preflight does not consume a successful-publication quota.
+
+### Security and transport threat model
+
+Version 1 requires an `https` registry API origin except for an explicitly
+configured loopback origin used for local development. Cargo rejects a step-up
+handshake over other cleartext `http` origins. The protocol depends on TLS
+server authentication and transport integrity ([RFC 8446]); copying every JSON
+attribute, including `challenge_id`, does not bypass a correctly authenticated
+connection, while an attacker controlling TLS or the configured registry
+origin controls the trust anchor and can replace instructions, poll replies,
+and bearer credentials. Same-origin checks cannot defend against that case.
+
+`challenge_id` is an unpredictable identifier, read capability, and
+idempotency key, not a mutation-authorization credential. Copying a challenge
+response can reveal its short-lived status and deliberately returned display
+metadata, and can prompt verification attempts, but the poll endpoint is
+read-only. A different credential or mutation cannot use the record. A fake
+`acknowledged` poll reply can at most cause Cargo to send the bound request; the
+honest registry rejects it without the matching server-side grant or callback
+proof. Expired records fail.
+
+An attacker with the same stolen credential and byte-identical request remains
+indistinguishable from the original client. Exact binding prevents
+substitution, while the mutation id and stored terminal response prevent two
+executions. This is the residual limitation already listed under Drawbacks.
 
 ### Policy and rollout
 
@@ -532,6 +581,9 @@ composes with these mechanisms rather than replacing them.
 [RubyGems MFA]: https://guides.rubygems.org/setting-up-multifactor-authentication/
 [RFC 9470]: https://www.rfc-editor.org/rfc/rfc9470.html
 [RFC 8628]: https://www.rfc-editor.org/rfc/rfc8628.html
+[RFC 8446]: https://www.rfc-editor.org/rfc/rfc8446.html
+[CWE-150]: https://cwe.mitre.org/data/definitions/150.html
+[Unicode UTR #36]: https://www.unicode.org/reports/tr36/tr36-15.html
 
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
