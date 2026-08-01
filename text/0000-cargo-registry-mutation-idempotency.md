@@ -133,7 +133,8 @@ observes at readiness and starts a monotonic attempt deadline of that duration
 immediately before beginning its first final request, which is no later than the
 server's claim time. A later response never extends Cargo's deadline. Cargo
 rejects a ready response that omits or invalidates this field while
-`idempotent-final` is active.
+`idempotent-final` is active, and rejects the field when the extension is
+inactive.
 
 ### Lifecycle
 

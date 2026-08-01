@@ -271,7 +271,9 @@ extension field is invalid when its extension name is absent from
 `requested_extensions`. If the name is requested but the registry does not
 activate it, the registry ignores that extension's fields and need not store
 them. When the registry activates the extension, it validates and binds its
-fields. Unknown JSON fields remain ignored under the ordinary
+fields. A recognized extension field set to JSON `null` is present for these
+rules unless that extension explicitly assigns semantics to `null`. Unknown
+JSON fields remain ignored under the ordinary
 forward-compatibility rule.
 
 Cargo reproduces the complete request when retrying a `preflight_id`. The
@@ -320,8 +322,9 @@ Required ready fields are `status`, `protocol_version`, `mutation_id`,
 `status`, `protocol_version`, `mutation_id`, `active_extensions`, `detail`,
 `poll_url`, and `challenge_expires_in`. `active_extensions` must be a subset of
 `requested_extensions`; Cargo rejects a duplicate, unrequested, or unsupported
-active name. `detail` is complete untrusted interaction text.
-Unknown response fields are ignored.
+active name. `detail` is complete untrusted interaction text. A recognized
+field defined only for another status or inactive extension must be absent;
+JSON `null` does not satisfy absence. Unknown response fields are ignored.
 
 If interaction is required but `allow_pending` is false, the registry creates
 no mutation-authorization record or capability and returns `403 Forbidden`:
