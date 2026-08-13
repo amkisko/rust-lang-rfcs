@@ -32,10 +32,19 @@ nor callback delivery authorizes a mutation.
 ## Motivation
 [motivation]: #motivation
 
+An attacker who has an active registry API token, and no other access, can
+today perform every mutation that token's scopes allow: publish, yank, unyank,
+or change owners. With this protocol enabled for that account or crate, the
+registry treats the token as only the first factor and refuses the exact
+mutation until a fresh, descriptor-bound grant exists; for crates.io that
+grant is created by a passkey or equivalent on the verification page. Remote
+use of the stolen token then stops while the owner still controls their
+authenticator.
+
 Cargo commonly authenticates registry mutations with a long-lived API token.
-Scopes, crate restrictions, and credential providers reduce exposure, but a
-stolen credential with publish authority can still be used without the user's
-presence. Website MFA does not protect a separately issued Cargo credential.
+Scopes, crate restrictions, and credential providers reduce how often that
+token is exposed. Website MFA does not protect a separately issued Cargo
+credential.
 
 Consider a maintainer who uses the same publish credential from a workstation
 for months. Malware, a copied credentials file, or an accidentally retained CI
@@ -55,7 +64,7 @@ operation and request bytes rather than merely saying that “some publish” or
 Existing Cargo authentication RFCs improve token storage, authentication, and
 replay resistance, but cannot require fresh authorization for one exact
 publish, yank, unyank, or owner change ([RFC 2730], [RFC 2947], [RFC 3139],
-[RFC 3231]).
+[RFC 3231], [RFC 3981]).
 A registry can reject an ordinary mutation with prose instructions, but Cargo
 cannot safely determine whether to wait, when to continue, or whether a
 non-interactive credential is exempt.
@@ -75,6 +84,7 @@ credential and substitution after preflight.
 [RFC 2947]: https://rust-lang.github.io/rfcs/2947-crates-io-token-scopes.html
 [RFC 3139]: https://rust-lang.github.io/rfcs/3139-cargo-alternative-registry-auth.html
 [RFC 3231]: https://rust-lang.github.io/rfcs/3231-cargo-asymmetric-tokens.html
+[RFC 3981]: https://github.com/rust-lang/rfcs/pull/3981
 
 ## Guide-level explanation
 [guide-level-explanation]: #guide-level-explanation
@@ -564,6 +574,14 @@ proceed. Holding an uploaded package for later approval would instead define a
 staged-publication lifecycle with reservation, visibility, replacement, and
 cleanup rules.
 
+Defaulting registry tokens to the OS credential store ([RFC 3981], building on
+[RFC 2730]) reduces plaintext-file exposure, it changes where a usable token
+lives. Once an attacker possesses that token, it remains sufficient authority
+for every in-scope mutation. This RFC adds a registry-enforced second
+requirement on the mutation itself, the two compose: safer storage reduces how
+often tokens leak; mutation authorization limits what a leaked token can do
+unattended.
+
 A registry may require passkey verification, administrator approval, SSH, or
 another policy. Cargo does not infer or participate in the verification method.
 
@@ -582,13 +600,31 @@ which request version to send without a separate version-list protocol.
 ## Prior art
 [prior-art]: #prior-art
 
-- npm and RubyGems can require MFA for publication and package settings.
+- npm can require 2FA for publish and package settings. The npm CLI prompts
+  for an account OTP or WebAuthn assertion and sends it with the publish
+  request. Package policy can require 2FA, allow a granular token that bypasses
+  2FA, or disallow tokens. The second factor authenticates the npm user for
+  that command; npm and the registry are versioned together.
+- RubyGems can require MFA (OTP or WebAuthn) for `gem push`, owner changes, and
+  sign-in. WebAuthn uses a localhost verification page; OTP is typed or passed
+  as `--otp`. The factor authenticates the gem owner to RubyGems.org for the
+  command. High-download gems must enable MFA.
+- This RFC is the Cargo-side generic handshake those products did not need as a
+  separate protocol. Cargo talks to many registries, so the client waits on a
+  versioned pending/ready grant bound to the exact mutation descriptor,
+  including the publish archive digest. The registry chooses the factor.
+  Companion proposals cover loopback wake-up (RubyGems-like) and idempotent
+  retry. crates.io website MFA, enrollment, and mandate policy remain registry
+  decisions; existing tracker items include [#815], [#13253], and [#13369].
 - [RFC 9470] communicates stronger authentication requirements but obtains a
   different token rather than a mutation-bound server grant.
 - OAuth defines its framework in [RFC 6749], device polling and slowdown in
   [RFC 8628], and native-app loopback guidance in [RFC 8252]. This separation
   keeps the base flow independent of the local callback optimization.
 
+[#815]: https://github.com/rust-lang/crates.io/issues/815
+[#13253]: https://github.com/rust-lang/crates.io/discussions/13253
+[#13369]: https://github.com/rust-lang/crates.io/discussions/13369
 [RFC 9470]: https://www.rfc-editor.org/rfc/rfc9470.html
 [RFC 6749]: https://www.rfc-editor.org/rfc/rfc6749.html
 [RFC 8628]: https://www.rfc-editor.org/rfc/rfc8628.html
