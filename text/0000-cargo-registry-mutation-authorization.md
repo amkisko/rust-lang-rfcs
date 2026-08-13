@@ -32,15 +32,6 @@ nor callback delivery authorizes a mutation.
 ## Motivation
 [motivation]: #motivation
 
-An attacker who has an active registry API token, and no other access, can
-today perform every mutation that token's scopes allow: publish, yank, unyank,
-or change owners. With this protocol enabled for that account or crate, the
-registry treats the token as only the first factor and refuses the exact
-mutation until a fresh, descriptor-bound grant exists; for crates.io that
-grant is created by a passkey or equivalent on the verification page. Remote
-use of the stolen token then stops while the owner still controls their
-authenticator.
-
 Cargo commonly authenticates registry mutations with a long-lived API token.
 Scopes, crate restrictions, and credential providers reduce how often that
 token is exposed. Website MFA does not protect a separately issued Cargo
@@ -48,18 +39,20 @@ credential.
 
 Consider a maintainer who uses the same publish credential from a workstation
 for months. Malware, a copied credentials file, or an accidentally retained CI
-log can give an attacker that credential. Token scopes may limit the attacker
-to one crate, but within that scope the attacker can still publish a malicious
-version immediately. Requiring the maintainer to approve a short-lived record
-for the exact crate, version, and request digest turns possession of the
-credential from sufficient authority into only the first of two independent
-requirements.
+or inference log can give an attacker that credential, and enough of the
+session that the crate, version, and request can be reconstructed. Token scopes
+may limit the attacker to one crate, but within that scope the attacker can
+still publish, yank, unyank, or change owners immediately. With this protocol
+enabled for that account or crate, the registry treats the token as the first
+factor and refuses the exact mutation until a fresh, descriptor-bound grant
+exists; for example, that grant is created by a passkey or equivalent on the
+verification page. Remote use of the stolen token then stops while the owner
+still controls their authenticator.
 
 There is a second failure mode after verification: a client or intermediary
 must not be able to replace the approved archive, owner list, or yank direction
 with a different mutation. The grant therefore covers the exact semantic
-operation and request bytes rather than merely saying that “some publish” or
-“some owner change” was approved.
+operation and request bytes.
 
 Existing Cargo authentication RFCs improve token storage, authentication, and
 replay resistance, but cannot require fresh authorization for one exact
@@ -75,7 +68,6 @@ later grant will cover. The registry controls verification: passkeys, an
 administrator's approval, an SSH workflow, or an out-of-band mechanism require
 no Cargo-specific factor protocol.
 
-This mechanism does not make a compromised publishing machine trustworthy.
 Malware active before preflight can change the request that Cargo subsequently
 hashes and describes. Mutation authorization limits unattended use of a stolen
 credential and substitution after preflight.
@@ -118,9 +110,8 @@ $ cargo publish
    Uploading example v1.2.3 (/work/example)
 ```
 
-`ready` authorizes Cargo to attempt the mutation. It does not mean that the
-crate was published or reserved. Only the ordinary endpoint's response reports
-the operation result.
+`ready` authorizes Cargo to attempt the mutation. Only the ordinary endpoint's
+response reports the operation result.
 
 The same workflow applies to yank, unyank, and owner changes. The verification
 surface obtains a server-generated summary from the stored descriptor. For
@@ -193,8 +184,7 @@ extension fails, while an automatic mode may use core behavior. An empty
 request or response set is the complete core protocol.
 
 `idempotent-final` is defined by the execution companion; `loopback-callback`
-is defined by the loopback companion. Unknown requested extension names are
-ignored rather than rejecting the preflight, allowing independent client and
+is defined by the loopback companion. Unknown requested extension names are ignored, allowing independent client and
 registry deployment.
 
 ### Client modes
@@ -223,7 +213,9 @@ interactive `auto`; it does not alter the core polling fallback.
 
 Before a version 1 mutation Cargo sends an authenticated `POST` to
 `/api/v1/auth/mutation-challenges`. Paths in this RFC are appended to the
-`api` base URL from `config.json` without discarding a base path prefix.
+`api` base URL from `config.json` without discarding a base path prefix, as in
+the [Cargo Registry Web API].
+
 Preflight uses JSON, requests JSON, follows no redirect, and sends the intended
 operation's normal credential-provider operation.
 
@@ -358,14 +350,14 @@ status, version, mutation id, active extension set, and optional detail. A retry
 for a pending or ready record returns its current result in the corresponding
 schema. A retry for a core-only record already consumed by a final request
 returns `409 Conflict` and cannot make the record ready again.
-`interaction_required` is a preflight outcome, not a record state.
+`interaction_required` is a preflight JSON status.
 
 `mutation_id` meets the [protocol limits]. It identifies the record but cannot
 authorize a mutation without the bound primary credential and a ready
 server-side grant.
 
 Expiry and polling values conform to the [protocol limits]. Cargo rejects an
-invalid expiry rather than extending it. The polling interval is advisory;
+invalid expiry. The polling interval is advisory;
 Cargo defaults or clamps it as specified in that appendix.
 
 ### Polling
@@ -460,15 +452,14 @@ its mutation claims with the preflight descriptor: `publish` includes crate,
 version, and archive checksum; `yank` and `unyank` include crate and version.
 The final endpoint validates the later credential against the ordinary request
 as RFC 3231 already requires. The mutation record is bound to the registered
-key as an independently revocable credential, not merely to the account that
-owns it.
+key as an independently revocable credential.
 
-RFC 3231 does not define an asymmetric-token claim for owner changes. This RFC
-extends its `mutation` claim with `owners`. For that value, `name` is required
-and identifies the crate, while `vers` and `cksum` are absent. The owner-change
-direction and complete ordered owner list remain bound by this protocol's
-descriptor and final request; the PASETO identifies the operation class and
-crate but does not duplicate the JSON body.
+RFC 3231's `mutation` claim is `publish`, `yank`, or `unyank`. This RFC adds
+`owners`, which Cargo already serializes for owner-change credentials. For
+that value, `name` is required and identifies the crate, while `vers` and
+`cksum` are absent. The owner-change direction and complete ordered owner list
+remain bound by this protocol's descriptor and final request; the PASETO
+identifies the operation class and crate but does not duplicate the JSON body.
 
 An RFC 3231 challenge and a mutation-authorization poll token are separate
 capabilities. A registry must not substitute one for the other or treat either
@@ -550,11 +541,11 @@ Whether an account, crate, credential, or operation requires authorization is
 registry policy. A registry can exempt a short-lived, request-scoped Trusted
 Publishing credential, but does not infer an exemption merely from `CI`.
 
-Discovery is not enforcement because old Cargo never sends preflight. A
-registry protects an operation only after its preflight and ordinary endpoint
-are deployed together and the ordinary endpoint rejects bypasses. Account and
-crate rollout can still be opt-in because preflight evaluates policy. Errors
-should name the minimum supported Cargo release.
+Old Cargo never sends preflight, so a registry protects an operation only
+after its preflight and ordinary endpoint are deployed together and the
+ordinary endpoint rejects bypasses. Account and crate rollout can still be
+opt-in because preflight evaluates policy. Errors should name the minimum
+supported Cargo release.
 
 ## Drawbacks
 [drawbacks]: #drawbacks
@@ -575,10 +566,10 @@ staged-publication lifecycle with reservation, visibility, replacement, and
 cleanup rules.
 
 Defaulting registry tokens to the OS credential store ([RFC 3981], building on
-[RFC 2730]) reduces plaintext-file exposure, it changes where a usable token
+[RFC 2730]) reduces plaintext-file exposure and changes where a usable token
 lives. Once an attacker possesses that token, it remains sufficient authority
 for every in-scope mutation. This RFC adds a registry-enforced second
-requirement on the mutation itself, the two compose: safer storage reduces how
+requirement on the mutation itself. The two compose: safer storage reduces how
 often tokens leak; mutation authorization limits what a leaked token can do
 unattended.
 
@@ -602,8 +593,11 @@ which request version to send without a separate version-list protocol.
 
 - npm can require 2FA for publish and package settings. The npm CLI prompts
   for an account OTP or WebAuthn assertion and sends it with the publish
-  request. Package policy can require 2FA, allow a granular token that bypasses
-  2FA, or disallow tokens. The second factor authenticates the npm user for
+  request. As of August 2026, package policy can require 2FA, allow a granular
+  token that bypasses 2FA, or disallow tokens. Bypass granular tokens lost
+  account- and package-governance actions in August 2026 and are scheduled to
+  lose direct publish around January 2027. Automated publish then uses trusted
+  publishing or staged publish. The second factor authenticates the npm user for
   that command; npm and the registry are versioned together.
 - RubyGems can require MFA (OTP or WebAuthn) for `gem push`, owner changes, and
   sign-in. WebAuthn uses a localhost verification page; OTP is typed or passed

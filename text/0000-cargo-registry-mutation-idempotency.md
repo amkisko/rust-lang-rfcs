@@ -93,9 +93,7 @@ When requesting this extension Cargo additionally sends:
 exact percent encoding. It includes any path prefix from the registry API base.
 Version 1 operations use no query; registries reject one.
 
-Cargo sends `method` and `request_target` as declared request facts. The
-registry derives the expected method and target from its own endpoint routing
-and compares them; it never treats the client-declared values as authority.
+Cargo sends `method` and `request_target` as declared request facts.
 
 `content_type` is `application/octet-stream` for publish,
 `application/json` for owners, and `null` for bodyless yank and unyank.
@@ -104,9 +102,9 @@ equivalent to `null`; it still derives and binds the absence of a media type.
 Parameters are prohibited. `Content-Encoding` remains prohibited. Transfer
 framing is not part of the descriptor.
 
-The registry derives method, request target, and media type independently from
-the operation and its own API base. Cargo's values are consistency assertions
-needed for safe replay, not authority for selecting an endpoint.
+The registry derives method, request target, and media type from the
+operation and its own API base and compares Cargo's values as consistency
+assertions needed for safe replay.
 
 The registry's mutation fingerprint covers protocol version, validated method,
 exact target, media type, absence of content encoding, raw body digest and
@@ -128,7 +126,7 @@ contains:
 `receive_lease_secs` is a positive whole number no greater than 3,600. Before
 claim it is the minimum duration of the receive lease the registry will create;
 after claim it is a conservative lower bound on the remaining lease. It is a
-client retry bound, not mutation authority. Cargo uses the first value it
+client retry bound. Cargo uses the first value it
 observes at readiness and starts a monotonic attempt deadline of that duration
 immediately before beginning its first final request, which is no later than the
 server's claim time. A later response never extends Cargo's deadline. Cargo
@@ -218,8 +216,7 @@ for external effects:
 
 An external effect such as object storage, index update, notification, or
 webhook is deduplicated under the mutation id or driven from a transactional
-outbox. Existing crate-version uniqueness is additional defense, not a
-substitute for recording the outcome.
+outbox. Existing crate-version uniqueness is additional defense.
 
 A normal `2xx` or deterministic application `4xx` after complete validation
 can be terminal. A response is not terminal when repeating admission could
@@ -340,7 +337,7 @@ registry whose endpoints cannot yet satisfy crash-safe replay.
 6. A crash before logical commit rolls back or resumes without duplicate
    effects.
 7. A crash after commit replays the stored response without repeating effects.
-8. Terminal retention lasts 24 hours from commit, not challenge expiry.
+8. Terminal retention lasts 24 hours from logical commit.
 9. Transient and credential failures remain nonterminal.
 10. A deterministic application `4xx` after exact validation can be replayed.
 11. Content type, encoding, target, length, raw digest, archive, or parsed-field

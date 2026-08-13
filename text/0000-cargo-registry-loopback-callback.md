@@ -103,10 +103,9 @@ The URL uses exactly:
   characters;
 - no user information or fragment.
 
-The state contains at least 128 random bits. It prevents unrelated local pages
-from guessing a valid wake-up request but is not mutation authority. The
-registry validates and stores the exact URL but never connects to it. It is
-delivery metadata, not part of the mutation fingerprint. Retrying one core
+The state contains at least 128 random bits and prevents unrelated local pages
+from guessing a valid wake-up request. The registry validates and stores the
+exact URL as delivery metadata but never connects to it. Retrying one core
 `preflight_id` for which `loopback-callback` is active requires a byte-identical
 callback object. Changes consisting only of ignored unknown extensions do not
 change the record. A callback object without a requested `loopback-callback`
@@ -127,9 +126,9 @@ Cargo displays that bounded inert text under the core sanitization and external
 URL-labeling rules.
 
 The verification document reads its operation summary and callback URL from
-the stored record, not URL query data or `detail`. Only after successful
-authorization does it navigate to or load the exact registered callback URL
-unchanged. It sends no protocol credential.
+the stored record. Only after successful authorization does it navigate to or
+load the exact registered callback URL unchanged. It sends no protocol
+credential.
 
 ### Verification document isolation
 
@@ -155,9 +154,7 @@ defense in depth: a script intentionally allowed by policy can read the
 operation and callback URL, so third-party script must not execute in this
 document.
 
-The verification UI obtains the operation summary from the stored record, not
-URL query data or `detail`. It describes completion as “authorized,” never as
-“published,” “yanked,” or another successful mutation. Cargo still must send
+The verification UI describes completion as “authorized.” Cargo still must send
 the final request.
 
 Plain WebAuthn proves control of a relying-party-scoped credential and optional
@@ -247,7 +244,7 @@ without weakening the registry grant.
    request.
 10. Callback failure leaves polling usable.
 11. Invalid peer, method, path, state, size, or timeout does not end the wait.
-12. Verification calls the operation authorized rather than successful.
+12. Verification copy describes the operation as authorized.
 13. A core-only or explicit-poll client activates no callback extension and the
     registry does not require callback metadata.
 14. Cargo uses a listener only after the preflight response echoes
